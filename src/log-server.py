@@ -5,11 +5,17 @@ import http.server
 import socketserver
 import signal
 import socket
-import threading # for heartbeat monitoring thread
+import threading
+
+import requests # for heartbeat monitoring thread
 
 try:
     output_id, address, nodes_list = sys.argv[1], sys.argv[2], sys.argv[3:]
-
+    leader = nodes_list[0]
+    if (address == leader):
+        im_leader = True
+    else:
+        im_leader = False
 except IndexError:
     print("Usage: log-server.py <host:port>")
     sys.exit(1)
@@ -17,21 +23,31 @@ except IndexError:
 crashed = False
 local_log = []
 
-previous_heartbeat = None
+previous_heartbeat = time.time()
 election = False
+
 # 
 class HeartbeatMonitor(threading.Thread):
 
     def run(self):
-        global previous_heartbeat, election
+        global previous_heartbeat, election, im_leader
         timeout = 2.0
-        while not election:
-            time.sleep(timeout)
-            if (previous_heartbeat < time.time() - timeout):
-                print("Heartbeat timeout detected")
-                
-
-
+        while True:
+            if (im_leader):
+                time.sleep(timeout/2)
+                # send heartbeats
+                #print("sending heartbeats")
+                for a in nodes_list:
+                    if (a != address):
+                        try:
+                            url = f"http://{a}/heartbeat"
+                            response = requests.post(url)
+                        except requests.exceptions.RequestException as e:
+                            print(f"Failed to send heartbeat to {a}")
+            else:
+                time.sleep(timeout)
+                if (time.time() - previous_heartbeat > timeout):
+                    print("Heartbeat timeout detected") # We need to set election here
 
 class LogRequestHandler(http.server.SimpleHTTPRequestHandler):
 
@@ -90,10 +106,12 @@ class LogRequestHandler(http.server.SimpleHTTPRequestHandler):
         
 def start_server(address):
 
+    print("starting heartbeat monitor")
     heartbeat_monitor = HeartbeatMonitor()
     heartbeat_monitor.daemon = True
-    heartbeat_monitor.start
+    heartbeat_monitor.start()
 
+    print("starting server")
     host, port = address.split(':')
     with socketserver.TCPServer((host, int(port)), LogRequestHandler) as server:
         print(f"Serving HTTP on {host} port {port}...")
