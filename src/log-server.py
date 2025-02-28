@@ -1,9 +1,11 @@
 import sys
+import time
 from urllib.parse import urlparse
 import http.server
 import socketserver
 import signal
 import socket
+import threading # for heartbeat monitoring thread
 
 try:
     output_id, address, nodes_list = sys.argv[1], sys.argv[2], sys.argv[3:]
@@ -14,6 +16,22 @@ except IndexError:
 
 crashed = False
 local_log = []
+
+previous_heartbeat = None
+election = False
+# 
+class HeartbeatMonitor(threading.Thread):
+
+    def run(self):
+        global previous_heartbeat, election
+        timeout = 2.0
+        while not election:
+            time.sleep(timeout)
+            if (previous_heartbeat < time.time() - timeout):
+                print("Heartbeat timeout detected")
+                
+
+
 
 class LogRequestHandler(http.server.SimpleHTTPRequestHandler):
 
@@ -63,8 +81,19 @@ class LogRequestHandler(http.server.SimpleHTTPRequestHandler):
             with open(f"output/{output_id}-server-{self.server.server_address[0]}{self.server.server_address[1]}.csv", 'w') as f:
                 for entry in local_log:
                     f.write(f"{entry}\n")
+
+        elif url == "/heartbeat":
+            global previous_heartbeat
+            previous_heartbeat = time.time()
+            self.send_response(200)
+            self.end_headers()
         
 def start_server(address):
+
+    heartbeat_monitor = HeartbeatMonitor()
+    heartbeat_monitor.daemon = True
+    heartbeat_monitor.start
+
     host, port = address.split(':')
     with socketserver.TCPServer((host, int(port)), LogRequestHandler) as server:
         print(f"Serving HTTP on {host} port {port}...")
