@@ -31,10 +31,10 @@ class HeartbeatMonitor(threading.Thread):
 
     def run(self):
         global previous_heartbeat, election, im_leader
-        timeout = 2.0
+        timeout = 2.0 # this could be changed 
         while True:
             if (im_leader):
-                time.sleep(timeout/2)
+                time.sleep(timeout/2) # this could be changed for some other number
                 # send heartbeats
                 #print("sending heartbeats")
                 for a in nodes_list:
@@ -47,7 +47,7 @@ class HeartbeatMonitor(threading.Thread):
             else:
                 time.sleep(timeout)
                 if (time.time() - previous_heartbeat > timeout):
-                    print("Heartbeat timeout detected") # We need to set election here
+                    print("Heartbeat timeout detected") # We need to activate election here
 
 class LogRequestHandler(http.server.SimpleHTTPRequestHandler):
 
