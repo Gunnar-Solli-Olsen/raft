@@ -22,11 +22,15 @@ except IndexError:
 
 crashed = False
 local_log = []
+# local_log = {} # this is to preserve index and term easier?
+new_log = ()
+term = 1
+index = 0
 
 previous_heartbeat = time.time()
 election = False
 
-# 
+
 class HeartbeatMonitor(threading.Thread):
 
     def run(self):
@@ -49,11 +53,39 @@ class HeartbeatMonitor(threading.Thread):
                 if (time.time() - previous_heartbeat > timeout):
                     print("Heartbeat timeout detected") # We need to activate election here
 
+
+class ConnectionHandler(threading.Thread):
+
+    def run(self):
+        data = self._args[0]
+        global nodes_list
+        node_count = len(nodes_list)
+        append_confirms = 1 # 1 vote from leader  
+
+        for a in nodes_list:
+            if (a == leader):
+                continue
+            print(f"leader sending append request to {a}...")
+            try:  
+                url = f"http://{a}/append" # leader sends append request to followers including the data 
+                response = requests.put(url, data=data.encode('utf-8'))
+                if response.status_code == 200:
+                    append_confirms += 1
+
+            except requests.exceptions.Timeout:
+                print(f"Request to {a} timed out >:(")
+
+        if (append_confirms > node_count/2):
+            print("Majority of nodes have appended the log entry")
+            # commit the log entry
+
+
 class LogRequestHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_PUT(self):
         global crashed, local_log
-        
+        url = urlparse(self.path).path
+        print("url:", url)
         if crashed:
             print(f"\n{self.server.server_address} Received PUT request while crashed, ignoring\n")
             return
@@ -62,12 +94,41 @@ class LogRequestHandler(http.server.SimpleHTTPRequestHandler):
         data = self.rfile.read(content_length).decode('utf-8')
         print(f"{self.server.server_address} Received PUT request with data: {data}")
         
-        # Current logging logic is simple: it just appends the data to a list.
-        local_log.append(data)
+        # none of the internal endpoints have been found so we assume this is from outside the cluster        
+        if (im_leader and url == "/send_to_leader"):
+            print(f"leader received put request with data: {data}")
+            
+            local_log.append(data)
+            
+            self.send_response(200) # leader received data
+            self.end_headers()
 
-        self.send_response(200)
-        self.end_headers()
+            ConnectionHandler(args=(data)).start()
+            
 
+        elif url.endswith("append"): # this is an internal endpoint received by followers
+            
+            # new, still very basic log replication without any checks for mistakes (will not recover, will not find new leader)
+            local_log.append(data) # TODO: add log voting here
+
+            # global term, index, new_log
+
+            # if (local_log[-1][1] == term and local_log[-1][2] == index - 1): # if term is the same, and the index is the next one (no missing data)
+            #     new_log = data
+            self.send_response(200)
+            self.end_headers()
+        else:
+            print("passing request to leader")
+            try:
+                url = f"http://{leader}/send_to_leader"
+                response = requests.put(url, data=data.encode('utf-8'), timeout=5)
+                print("finished sending request to leader")
+                self.send_response(200)
+                self.end_headers()
+
+            except requests.exceptions.Timeout:
+                print(f"Request to {leader} timed out >:(")
+        
     def do_POST(self):
         global crashed, local_log
         url = urlparse(self.path).path
@@ -104,6 +165,15 @@ class LogRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(200)
             self.end_headers()
         
+        # This endpoint commits the current new_log into local_log
+        elif url == "/commit":
+            global new_log
+            local_log.append(new_log)
+            # Clear new log 
+            new_log = ()    
+            self.send_response(200)
+            self.end_headers() 
+
 def start_server(address):
 
     print("starting heartbeat monitor")
